@@ -6,6 +6,8 @@ import time
 from datetime import datetime
 import os
 import re
+import requests  # 서버 통신을 위해 requests 라이브러리 추가
+import json
 
 from selenium import webdriver
 from webdriver_manager.chrome import ChromeDriverManager
@@ -17,17 +19,18 @@ from selenium.webdriver.support.wait import WebDriverWait
 from naverCafe_Openai import WeddingAssistant
 
 
-
 class WeddingAssistantBot:
     """WeddingAssistantBot은 Naver 카페에서 글을 가져와 댓글을 작성하는 자동화 봇입니다."""
 
     def __init__(self, login_id, pw, log_callback=None, additional_prompt=None):
-        self.driver = None  # Initialize later
+        self.driver = None
         self.login_id = login_id
         self.pw = pw
-        self.assistant = WeddingAssistant(additional_prompt=additional_prompt)
+        self.additional_prompt = additional_prompt
+        self.assistant = None  # 모드에 따라 나중에 초기화
         self.is_running = True
         self.log_callback = log_callback
+        self.server_url = "http://127.0.0.1:8000/generate-comment"
 
     def log(self, message):
         """Logs a message to the callback or prints to console."""
@@ -40,6 +43,50 @@ class WeddingAssistantBot:
         """Stops the bot's execution."""
         self.log("실행을 정지 중입니다. 잠시만 기다려주세요")
         self.is_running = False
+
+    def _generate_comments_via_server(self, license_key, queries):
+        """서버를 통해 댓글을 생성합니다."""
+        responses = []
+        for i, query in enumerate(queries):
+            if not self.is_running: break
+            self.log(f"({i + 1}/{len(queries)}) 서버에 댓글 생성 요청 중... (게시글: {query[:20]}...)")
+            try:
+                payload = {
+                    "license_key": license_key,
+                    "post_title": query,
+                    "post_content": "",  # 현재는 제목만 사용하므로 내용은 비워둠
+                    "additional_prompt": self.additional_prompt
+                }
+                response = requests.post(self.server_url, json=payload, timeout=30)
+
+                if response.status_code == 200:
+                    comment = response.json().get("comment")
+                    if comment:
+                        responses.append(comment)
+                    else:
+                        # 서버가 에러 메시지를 보냈을 경우
+                        error_msg = response.json().get("error", "알 수 없는 오류")
+                        self.log(f"서버 오류: {error_msg}")
+                        break  # 오류 발생 시 중단
+                else:
+                    # HTTP 상태 코드가 200이 아닐 경우
+                    error_detail = response.json().get("detail", response.text)
+                    self.log(f"서버 요청 실패 (HTTP {response.status_code}): {error_detail}")
+                    break  # 오류 발생 시 중단
+
+            except requests.exceptions.RequestException as e:
+                self.log(f"서버 연결 오류: {e}")
+                self.log("서버가 실행 중인지 확인해주세요.")
+                break  # 오류 발생 시 중단
+        return responses
+
+    def _generate_comments_locally(self, openai_api_key, queries):
+        """로컬에서 직접 OpenAI API를 호출하여 댓글을 생성합니다."""
+        os.environ["OPENAI_API_KEY"] = openai_api_key
+        self.assistant = WeddingAssistant(additional_prompt=self.additional_prompt)
+        self.log("OpenAI API로 댓글 생성 중...")
+        responses = self.assistant.get_answers(queries)
+        return responses
 
     def random_delay(self, min_delay=1, max_delay=3):
         """랜덤 딜레이를 주어 자동화 탐지를 피합니다."""
@@ -120,6 +167,33 @@ class WeddingAssistantBot:
         self.log(f"Found {len(posts)} posts.")
         return posts
 
+    def fetch_post_contents(self, posts):
+        contents = []
+
+        for post in posts:
+            if not self.is_running: break
+            # link로 이동
+            link = post["link"]
+            self.driver.get(link)
+            self.random_delay(1, 2)
+            self.switch_to_iframe("iframe#cafe_main")
+
+            # selector로 content가져오기
+            try:
+                # 동적으로 CSS Selector를 생성하여 제목 및 링크 가져오기
+                selector = f"div.ArticleContentBox div.article_container div.article_viewer div.content div.se-viewer div.se-main-container div.se-module"
+
+                a_element = self.driver.find_element(By.CSS_SELECTOR, selector)
+                content = a_element.text
+
+                contents.append(content)
+                self.log(f"  - 찾은 게시판 내용 : {content}")
+
+            except Exception as e:
+                self.log(f"Could not fetch post link : {link}")
+        self.log(f"Found {len(contents)} contents.")
+        return contents
+
     def _get_next_daily_index(self):
         """Calculates the next index for today's log entries."""
         log_file = "comment_log.txt"
@@ -128,7 +202,7 @@ class WeddingAssistantBot:
 
         today_str = datetime.now().strftime("%Y-%m-%d")
         last_index = 0
-        
+
         with open(log_file, "r", encoding="utf-8") as f:
             lines = f.readlines()
 
@@ -139,7 +213,7 @@ class WeddingAssistantBot:
                 if last_date_str == today_str:
                     last_index = int(match.group(3))
                 break
-        
+
         return last_index + 1
 
     def log_comment_to_file(self, url, comment_text):
@@ -156,6 +230,9 @@ class WeddingAssistantBot:
             self.log(f"Error logging comment to file: {e}")
 
     def post_comment(self, url, comment_text):
+        if len(comment_text)==0:
+            self.log(f"url({url})에 대한 답변은 달리지 않습니다.")
+            return
         """특정 URL 게시글에 댓글을 작성합니다."""
         if not self.is_running: return
         self.log(f"Posting comment on: {url}")
@@ -181,27 +258,42 @@ class WeddingAssistantBot:
         except Exception as e:
             self.log(f"  - Error posting comment: {e}")
 
-    def execute(self, cafe_url, board_id):
+    def execute(self, cafe_url, board_id, mode, key):
         """봇의 주요 프로세스를 실행합니다: 로그인 -> 카페 탐색 -> 게시글 조회 -> 댓글 작성."""
-        # self.driver = webdriver.Chrome()
         service = Service(ChromeDriverManager().install())
         self.driver = webdriver.Chrome(service=service)
-        
+
         self.login_naver()
         if not self.is_running: return
 
         self.navigate_to_cafe(cafe_url, board_id)
         if not self.is_running: return
 
-        posts = self.fetch_recent_posts(13)
+        posts = self.fetch_recent_posts(12)
         if not posts or not self.is_running:
             self.log("No posts found or stop signal received. Exiting.")
             return
-            
-        queries = [post["title"] for post in posts]
-        self.log("Generating comments with OpenAI...")
-        responses = self.assistant.get_answers(queries)
-        self.log(f"Generated {len(responses)} comments.")
+
+        post_contents = self.fetch_post_contents(posts)
+        queries=[]
+        for i in range(len(posts)):
+            queries.append({
+                "title": posts[i]["title"],
+                "content": post_contents[i]
+            })
+
+        print(queries)
+
+        responses = []
+        if mode == 'server':
+            responses = self._generate_comments_via_server(license_key=key, queries=queries)
+        elif mode == 'local':
+            if not key:
+                self.log("오류: 로컬 모드를 선택했지만 OpenAI API 키가 입력되지 않았습니다.")
+            else:
+                responses = self._generate_comments_locally(openai_api_key=key, queries=queries)
+
+        self.log(f"생성된 댓글 {len(responses)}개.")
 
         if not self.is_running: return
 
@@ -225,9 +317,13 @@ if __name__ == "__main__":
     login_id = "your login id"
     pw = "your password"
     cafe_url = "https://cafe.naver.com/directwedding"
-    board_id = "menuLink113"  # 게시판 ID
+    board_id = "menuLink113"
 
-    # 봇 초기화 및 실행
+    # 사용 예시는 로컬 모드로 직접 API 키를 사용한다고 가정
+    # 실제 GUI에서는 이 부분이 동적으로 처리됨
+    your_openai_api_key = os.getenv("OPENAI_API_KEY")
+    # print(your_openai_api_key)
+
     bot = WeddingAssistantBot(login_id, pw)
-    bot.execute(cafe_url, board_id)
+    bot.execute(cafe_url, board_id, mode='local', key=your_openai_api_key)
     bot.close()

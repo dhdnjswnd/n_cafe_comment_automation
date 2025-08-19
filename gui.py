@@ -61,6 +61,114 @@ class DonationDialog(ttk.Toplevel):
     def donate_and_close(self):
         self.parent.open_donation_link()
         self.destroy()
+
+
+class LicenseDialog(ttk.Toplevel):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.parent = parent
+        self.title("라이센스 등록")
+
+        # 부모 창 중앙에 위치시키기
+        parent_x = parent.winfo_x()
+        parent_y = parent.winfo_y()
+        parent_width = parent.winfo_width()
+        parent_height = parent.winfo_height()
+        dialog_width = 400
+        dialog_height = 200
+        x = parent_x + (parent_width - dialog_width) // 2
+        y = parent_y + (parent_height - dialog_height) // 2
+        self.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
+
+        self.transient(parent)
+        self.grab_set()
+
+        main_frame = ttk.Frame(self, padding=20)
+        main_frame.pack(expand=True, fill=BOTH)
+
+        label = ttk.Label(main_frame, text="라이센스 키를 입력하세요:", font=("-size", 12))
+        label.pack(pady=(0, 10))
+
+        self.license_entry = ttk.Entry(main_frame, width=40)
+        self.license_entry.pack(pady=(0, 20))
+
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack()
+
+        save_button = ttk.Button(button_frame, text="등록하기", command=self.save_license, bootstyle="primary")
+        save_button.pack(side=LEFT, padx=10)
+
+        cancel_button = ttk.Button(button_frame, text="취소", command=self.destroy, bootstyle="secondary")
+        cancel_button.pack(side=LEFT, padx=10)
+
+    def save_license(self):
+        license_key = self.license_entry.get().strip()
+        if not license_key:
+            # 사용자에게 키를 입력하라는 메시지를 표시할 수 있습니다.
+            return
+
+        config_data = {}
+        if os.path.exists(CONFIG_FILE):
+            try:
+                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                    config_data = json.load(f)
+            except (json.JSONDecodeError, FileNotFoundError):
+                pass
+
+        config_data["license_key"] = license_key
+
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(config_data, f, ensure_ascii=False, indent=4)
+
+        self.parent.check_license_and_update_ui()
+        self.destroy()
+
+
+class ExistingLicenseDialog(ttk.Toplevel):
+    def __init__(self, parent, license_key):
+        super().__init__(parent)
+        self.parent = parent
+        self.title("등록된 라이센스")
+
+        # 부모 창 중앙에 위치시키기
+        parent_x = parent.winfo_x()
+        parent_y = parent.winfo_y()
+        parent_width = parent.winfo_width()
+        parent_height = parent.winfo_height()
+        dialog_width = 450
+        dialog_height = 180
+        x = parent_x + (parent_width - dialog_width) // 2
+        y = parent_y + (parent_height - dialog_height) // 2
+        self.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
+
+        self.transient(parent)
+        self.grab_set()
+
+        main_frame = ttk.Frame(self, padding=20)
+        main_frame.pack(expand=True, fill=BOTH)
+
+        label = ttk.Label(main_frame, text="등록된 라이센스 키입니다.", font=("-size", 12))
+        label.pack(pady=(0, 10))
+
+        key_entry = ttk.Entry(main_frame, width=50)
+        key_entry.insert(0, license_key)
+        key_entry.config(state="readonly")
+        key_entry.pack(pady=(0, 20))
+
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack()
+
+        change_button = ttk.Button(button_frame, text="라이센스 변경", command=self.change_license, bootstyle="primary")
+        change_button.pack(side=LEFT, padx=10)
+
+        close_button = ttk.Button(button_frame, text="닫기", command=self.destroy, bootstyle="secondary")
+        close_button.pack(side=LEFT, padx=10)
+
+    def change_license(self):
+        self.destroy()
+        LicenseDialog(self.parent)
+
+
 class CafeBotGUI(ttk.Window):
     def __init__(self):
         super().__init__(themename="litera")  # 모던한 'litera' 테마 적용
@@ -85,8 +193,7 @@ class CafeBotGUI(ttk.Window):
         help_frame = ttk.Frame(main_frame)
         help_frame.pack(fill=tk.X, pady=(10, 0), anchor=W)
 
-        api_key_button = ttk.Button(help_frame, text="🔑 OpenAI API Key 발급 방법", command=self.open_api_key_guide,
-                                    bootstyle="link-primary")
+        api_key_button = ttk.Button(help_frame, text="🔑 OpenAI API Key 발급 방법", command=self.open_api_key_guide, bootstyle="link-primary")
         api_key_button.pack(side=tk.LEFT, padx=5)
 
         manual_button = ttk.Button(help_frame, text="📖 프로그램 사용법", command=self.open_manual, bootstyle="link-primary")
@@ -94,6 +201,9 @@ class CafeBotGUI(ttk.Window):
 
         dev_button = ttk.Button(help_frame, text="👨‍💻 개발자 소개", command=self.open_dev_page, bootstyle="link-primary")
         dev_button.pack(side=tk.LEFT, padx=5)
+
+        license_button = ttk.Button(help_frame, text="📜 라이센스 등록", command=self.open_license_dialog, bootstyle="link-info")
+        license_button.pack(side=tk.LEFT, padx=5)
 
         # --- Input Frame ---
         input_frame = ttk.LabelFrame(main_frame, text="자동화 설정", padding="15")
@@ -120,7 +230,7 @@ class CafeBotGUI(ttk.Window):
             self.entries[label_text.split(':')[0].replace(" ", "_")] = entry
 
         self.save_var = tk.BooleanVar()
-        save_check = ttk.Checkbutton(input_frame, text="입력 정보 저장", variable=self.save_var, bootstyle="primary")
+        save_check = ttk.Checkbutton(input_frame, text="입력 정보 저장(PW제외)", variable=self.save_var, bootstyle="primary")
         save_check.grid(row=len(labels), column=0, columnspan=2, pady=10, sticky=tk.W)
 
         # --- System Prompt Frame ---
@@ -134,18 +244,18 @@ class CafeBotGUI(ttk.Window):
 
 
         # --- Control Frame ---
-        control_frame = ttk.Frame(main_frame)
-        control_frame.pack(fill=tk.X, pady=10)
-        control_frame.columnconfigure((0, 1, 2), weight=1)
+        self.control_frame = ttk.Frame(main_frame)
+        self.control_frame.pack(fill=tk.X, pady=10)
+        self.control_frame.columnconfigure((0, 1, 2), weight=1)
 
-        self.start_button = ttk.Button(control_frame, text="시작하기", command=self.start_bot, bootstyle="success-outline")
+        self.start_button = ttk.Button(self.control_frame, text="시작하기", command=self.start_bot, bootstyle="success-outline")
         self.start_button.grid(row=0, column=0, padx=5, pady=5, sticky=tk.EW)
 
-        self.stop_button = ttk.Button(control_frame, text="중지하기", command=self.stop_bot, state=tk.DISABLED, bootstyle="danger-outline")
+        self.stop_button = ttk.Button(self.control_frame, text="중지하기", command=self.stop_bot, state=tk.DISABLED, bootstyle="danger-outline")
         self.stop_button.grid(row=0, column=1, padx=5, pady=5, sticky=tk.EW)
 
-        donation_button = ttk.Button(control_frame, text="❤️ 후원하기", command=self.open_donation_link, bootstyle="primary")
-        donation_button.grid(row=0, column=2, padx=5, pady=5, sticky=tk.EW)
+        self.donation_button = ttk.Button(self.control_frame, text="❤️ 후원하기", command=self.open_donation_link, bootstyle="primary")
+        self.donation_button.grid(row=0, column=2, padx=5, pady=5, sticky=tk.EW)
 
 
         # --- Log Frame ---
@@ -156,6 +266,7 @@ class CafeBotGUI(ttk.Window):
         self.log_area.pack(fill=tk.BOTH, expand=True)
 
         self.load_config()
+        self.check_license_and_update_ui()
 
     def open_manual(self):
         """프로그램 사용법 웹사이트를 엽니다."""
@@ -189,6 +300,39 @@ class CafeBotGUI(ttk.Window):
         webbrowser.open_new_tab(url)
         self.log("개발자 소개 페이지를 엽니다.")
 
+    def open_license_dialog(self):
+        config_data = {}
+        if os.path.exists(CONFIG_FILE):
+            try:
+                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                    config_data = json.load(f)
+            except (json.JSONDecodeError, FileNotFoundError):
+                pass
+
+        if license_key := config_data.get("license_key"):
+            # 라이센с 키가 이미 있으면 보여주는 다이얼로그
+            ExistingLicenseDialog(self, license_key)
+        else:
+            # 라이센스 키가 없으면 새로 입력하는 다이얼로그
+            LicenseDialog(self)
+
+    def check_license_and_update_ui(self):
+        config_data = {}
+        if os.path.exists(CONFIG_FILE):
+            try:
+                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                    config_data = json.load(f)
+            except (json.JSONDecodeError, FileNotFoundError):
+                pass
+
+        if config_data.get("license_key"):
+            self.donation_button.grid_remove()
+            self.control_frame.columnconfigure((0, 1), weight=1)
+            self.control_frame.columnconfigure(2, weight=0)
+        else:
+            self.donation_button.grid()
+            self.control_frame.columnconfigure((0, 1, 2), weight=1)
+
     def log(self, message):
         self.log_area.config(state='normal')
         self.log_area.insert(tk.END, message + "\n")
@@ -200,15 +344,22 @@ class CafeBotGUI(ttk.Window):
 
 
     def start_bot(self):
-        # 후원 다이얼로그를 먼저 띄움
-        dialog = DonationDialog(self)
-        self.wait_window(dialog)  # 다이얼로그가 닫힐 때까지 대기
+        # 라이센스 키 확인
+        config_data = {}
+        if os.path.exists(CONFIG_FILE):
+            try:
+                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                    config_data = json.load(f)
+            except (json.JSONDecodeError, FileNotFoundError):
+                pass
+
+        # 라이센스가 없으면 후원 다이얼로그를 띄움
+        if not config_data.get("license_key"):
+            dialog = DonationDialog(self)
+            self.wait_window(dialog)  # 다이얼로그가 닫힐 때까지 대기
 
         if self.save_var.get():
             self.save_config()
-        else:
-            if os.path.exists(CONFIG_FILE):
-                os.remove(CONFIG_FILE)
 
         login_id = self.entries["Naver_ID"].get()
         pw = self.entries["Naver_PW"].get()
@@ -235,7 +386,8 @@ class CafeBotGUI(ttk.Window):
         try:
             from autologin_key import WeddingAssistantBot
             self.bot_instance = WeddingAssistantBot(login_id, pw, log_callback=self.log, additional_prompt=additional_prompt)
-            self.bot_instance.execute(cafe_url, board_id)
+
+            self.bot_instance.execute(cafe_url, board_id,"local",os.getenv("OPENAI_API_KEY"))
             self.log("봇 작업이 완료되었습니다.")
         except Exception as e:
             self.log(f"오류가 발생했습니다: {e}")
@@ -265,6 +417,13 @@ class CafeBotGUI(ttk.Window):
 
     def save_config(self):
         config_data = {}
+        if os.path.exists(CONFIG_FILE):
+            try:
+                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                    config_data = json.load(f)
+            except (json.JSONDecodeError, FileNotFoundError):
+                pass
+
         for key, entry in self.entries.items():
             if "PW" not in key:
                 config_data[key] = entry.get()
